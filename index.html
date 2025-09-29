@@ -1,64 +1,299 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sri Lanka Railways Map</title>
+  <title>Sri Lanka Railways Route Finder</title>
   <meta charset="utf-8" />
+  
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  
   <style>
+    body { margin: 0; padding: 0; font-family: sans-serif; }
     #map { height: 100vh; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      background: white;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.2);
+    }
+    #controls select, #controls button {
+      display: block;
+      width: 100%;
+      margin-bottom: 5px;
+    }
+    #info {
+        position: absolute;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1000;
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 8px 15px;
+        border-radius: 5px;
+        font-size: 16px;
+        display: none; /* Hidden by default */
+    }
+    .train-icon {
+        font-size: 24px;
+        text-shadow: 0 0 3px black;
+        transform: translate(-12px, -12px); /* Center the emoji icon */
+    }
   </style>
 </head>
 <body>
-  <div id="map"></div>
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <script>
-    // Initialize map
-    var map = L.map('map').setView([7.8731, 80.7718], 8); // Sri Lanka center
 
-    // Add basemap
+  <div id="map"></div>
+
+  <div id="controls">
+    <h4>🚆 Route Finder</h4>
+    <label for="start-station">Start Station:</label>
+    <select id="start-station"></select>
+    <label for="end-station">End Station:</label>
+    <select id="end-station"></select>
+    <button id="find-route-btn">Find Route</button>
+  </div>
+
+  <div id="info"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+  <script>
+    // --- 1. INITIALIZATION ---
+    const map = L.map('map').setView([7.8731, 80.7718], 8); // Sri Lanka center
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap contributors'
     }).addTo(map);
 
-    // Load stations (points)
-    fetch('https://raw.githubusercontent.com/shehan-geo/Rail/main/Stations.geojson')
-      .then(res => res.json())
-      .then(data => {
-        L.geoJSON(data, {
-          pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
-            radius: 5,
-            fillColor: "red",
-            color: "black",
-            weight: 3,
-            opacity: 1,
-            fillOpacity: 0.8
-          }),
-          // --- ADD THIS FUNCTION ---
-          onEachFeature: (feature, layer) => {
-            // Check if the feature has a 'station' property
-            if (feature.properties && feature.properties.station) {
-              // Bind a popup to the layer (the circle marker)
-              layer.bindPopup(feature.properties.station);
-            }
-          }
-          // --- END OF ADDITION ---
-        }).addTo(map);
-      });
+    const startStationSelect = document.getElementById('start-station');
+    const endStationSelect = document.getElementById('end-station');
+    const findRouteBtn = document.getElementById('find-route-btn');
+    const infoDiv = document.getElementById('info');
 
-    // Load railways (lines)
-    fetch('https://raw.githubusercontent.com/shehan-geo/Rail/main/Rail.geojson')
-      .then(res => res.json())
-      .then(data => {
-        L.geoJSON(data, {
-          style: {
-            color: "red",    // railway line color
-            opacity: 1,
-            weight: 3,       // line thickness
-            opacity: 1,
-            fillOpacity: 0.8
+    let stationsData = null;
+    let railData = null;
+    let railGraph = null;
+    let stationPointsMap = new Map();
+
+    // Store map layers to clear them later
+    let routeLayer = null;
+    let trainMarker = null;
+    let animationInterval = null;
+
+    // --- 2. DATA FETCHING AND UI POPULATION ---
+    // Use Promise.all to fetch both datasets simultaneously
+    Promise.all([
+      fetch('https://raw.githubusercontent.com/shehan-geo/Rail/main/Stations.geojson').then(res => res.json()),
+      fetch('https://raw.githubusercontent.com/shehan-geo/Rail/main/Rail.geojson').then(res => res.json())
+    ]).then(([stations, rail]) => {
+      stationsData = stations;
+      railData = rail;
+
+      // Add stations to map and populate dropdowns
+      L.geoJSON(stationsData, {
+        pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 4, fillColor: "#555", color: "black", weight: 1, opacity: 1, fillOpacity: 0.8 })
+      }).addTo(map);
+
+      stationsData.features
+        .sort((a, b) => a.properties.station.localeCompare(b.properties.station)) // Sort alphabetically
+        .forEach(feature => {
+          const stationName = feature.properties.station;
+          const coords = feature.geometry.coordinates;
+          
+          // Populate dropdowns
+          startStationSelect.innerHTML += `<option value="${stationName}">${stationName}</option>`;
+          endStationSelect.innerHTML += `<option value="${stationName}">${stationName}</option>`;
+          
+          // Store station coordinates for easy lookup
+          stationPointsMap.set(stationName, coords);
+        });
+
+      // Build the graph network from the rail lines for routing
+      console.log("Building rail network graph...");
+      railGraph = buildGraph(railData);
+      console.log("Graph built!");
+
+    }).catch(error => console.error("Error loading data:", error));
+
+    
+    // --- 3. GRAPH BUILDING LOGIC ---
+    function buildGraph(railGeoJSON) {
+      const graph = {}; // Adjacency list representation
+      const points = {}; // Helper to map coordinates to a unique ID
+
+      function addNode(coord) {
+        const id = coord.join(',');
+        if (!points[id]) {
+          points[id] = { id: id, coord: coord };
+          graph[id] = {}; // Initialize neighbors
+        }
+        return id;
+      }
+
+      function addEdge(node1Id, node2Id) {
+        const dist = turf.distance(points[node1Id].coord, points[node2Id].coord);
+        graph[node1Id][node2Id] = dist;
+        graph[node2Id][node1Id] = dist; // Bidirectional graph
+      }
+
+      railGeoJSON.features.forEach(feature => {
+        if (feature.geometry.type === 'LineString') {
+          const coords = feature.geometry.coordinates;
+          for (let i = 0; i < coords.length - 1; i++) {
+            const node1Id = addNode(coords[i]);
+            const node2Id = addNode(coords[i + 1]);
+            addEdge(node1Id, node2Id);
           }
-        }).addTo(map);
+        }
       });
+      return { graph, points };
+    }
+
+
+    // --- 4. PATHFINDING ALGORITHM (DIJKSTRA) ---
+    function findShortestPath(startCoord, endCoord) {
+      // Find the closest points on the rail network graph to the actual station coordinates
+      const allRailPoints = turf.featureCollection(Object.values(railGraph.points).map(p => turf.point(p.coord, { id: p.id })));
+      const startPointOnGraph = turf.nearestPoint(turf.point(startCoord), allRailPoints);
+      const endPointOnGraph = turf.nearestPoint(turf.point(endCoord), allRailPoints);
+
+      const startNodeId = startPointOnGraph.properties.id;
+      const endNodeId = endPointOnGraph.properties.id;
+
+      if (startNodeId === endNodeId) {
+          alert("Start and End stations are the same or too close.");
+          return null;
+      }
+      
+      // Dijkstra's algorithm implementation
+      const distances = {};
+      const prev = {};
+      const pq = new Set();
+      
+      for (const nodeId in railGraph.graph) {
+          distances[nodeId] = Infinity;
+          prev[nodeId] = null;
+          pq.add(nodeId);
+      }
+      distances[startNodeId] = 0;
+
+      while (pq.size > 0) {
+        // Find node with smallest distance in pq
+        let u = null;
+        pq.forEach(nodeId => {
+            if (u === null || distances[nodeId] < distances[u]) {
+                u = nodeId;
+            }
+        });
+        
+        pq.delete(u);
+
+        if (u === endNodeId) break; // Found the end
+
+        for (const v in railGraph.graph[u]) {
+          const alt = distances[u] + railGraph.graph[u][v];
+          if (alt < distances[v]) {
+            distances[v] = alt;
+            prev[v] = u;
+          }
+        }
+      }
+
+      // Reconstruct the path
+      const path = [];
+      let current = endNodeId;
+      if (prev[current] || current === startNodeId) {
+        while (current) {
+          path.unshift(railGraph.points[current].coord);
+          current = prev[current];
+        }
+      } else {
+        return null; // No path found
+      }
+      return path;
+    }
+
+
+    // --- 5. EVENT LISTENER AND ANIMATION ---
+    findRouteBtn.addEventListener('click', () => {
+      const startStation = startStationSelect.value;
+      const endStation = endStationSelect.value;
+
+      if (startStation === endStation) {
+        alert("Please select different start and end stations.");
+        return;
+      }
+
+      // Clear previous route and animation
+      if (routeLayer) map.removeLayer(routeLayer);
+      if (trainMarker) map.removeLayer(trainMarker);
+      if (animationInterval) clearInterval(animationInterval);
+      infoDiv.style.display = 'none';
+
+      const startCoord = stationPointsMap.get(startStation);
+      const endCoord = stationPointsMap.get(endStation);
+      
+      const pathCoords = findShortestPath(startCoord, endCoord);
+
+      if (!pathCoords) {
+        alert("Could not find a route. The stations may not be connected on the provided rail data.");
+        return;
+      }
+      
+      // Draw the route on the map
+      const routeLine = turf.lineString(pathCoords);
+      routeLayer = L.geoJSON(routeLine, { style: { color: "red", weight: 5, opacity: 0.8 } }).addTo(map);
+      map.fitBounds(routeLayer.getBounds().pad(0.1));
+
+      // Animate the train
+      animateTrain(routeLine);
+    });
+
+    function animateTrain(routeLine) {
+        const totalDistance = turf.length(routeLine, { units: 'kilometers' });
+        let traveledDistance = 0;
+        const speed = 100; // km/h
+        const intervalTime = 100; // ms
+        const distancePerInterval = (speed / 3600) * (intervalTime / 1000); // km
+
+        // Create a custom DivIcon for the train
+        const trainIcon = L.divIcon({
+            className: 'train-icon',
+            html: '🚆'
+        });
+
+        const startPosition = routeLine.geometry.coordinates[0];
+        trainMarker = L.marker([startPosition[1], startPosition[0]], { icon: trainIcon }).addTo(map);
+
+        infoDiv.style.display = 'block';
+
+        animationInterval = setInterval(() => {
+            traveledDistance += distancePerInterval;
+            
+            if (traveledDistance >= totalDistance) {
+                // Snap to end and stop
+                const endPosition = routeLine.geometry.coordinates[routeLine.geometry.coordinates.length - 1];
+                trainMarker.setLatLng([endPosition[1], endPosition[0]]);
+                infoDiv.innerHTML = `Arrived! Total distance: ${totalDistance.toFixed(2)} km`;
+                clearInterval(animationInterval);
+                return;
+            }
+
+            // Get current point along the line
+            const currentPoint = turf.along(routeLine, traveledDistance, { units: 'kilometers' });
+            const [lng, lat] = currentPoint.geometry.coordinates;
+            trainMarker.setLatLng([lat, lng]);
+
+            const remainingDistance = totalDistance - traveledDistance;
+            infoDiv.innerHTML = `Remaining distance: <strong>${remainingDistance.toFixed(2)} km</strong>`;
+
+        }, intervalTime);
+    }
   </script>
 </body>
 </html>
