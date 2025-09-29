@@ -21,7 +21,7 @@
     }).addTo(map);
 
     // Load stations (points)
-    fetch('https://raw.githubusercontent.com/shehan-geo/Rail/main/stations.geojson')
+    fetch('https://raw.githubusercontent.com/shehan-geo/Rail/main/Stations.geojson')
       .then(res => res.json())
       .then(data => {
         L.geoJSON(data, {
