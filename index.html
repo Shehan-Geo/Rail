@@ -12,16 +12,40 @@
   <div id="map"></div>
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
-    var map = L.map('map').setView([7.8731, 80.7718], 7); // Sri Lanka center
+    // Initialize map
+    var map = L.map('map').setView([7.8731, 80.7718], 8); // Sri Lanka center
+
+    // Add basemap
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap contributors'
     }).addTo(map);
 
-    // Load your GeoJSON from GitHub raw link
+    // Load stations (points)
+    fetch('https://raw.githubusercontent.com/shehan-geo/Rail/main/stations.geojson')
+      .then(res => res.json())
+      .then(data => {
+        L.geoJSON(data, {
+          pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+            radius: 5,
+            fillColor: "red",
+            color: "black",
+            weight: 1,
+            opacity: 1,
+            fillOpacity: 0.8
+          })
+        }).addTo(map);
+      });
+
+    // Load railways (lines)
     fetch('https://raw.githubusercontent.com/shehan-geo/Rail/main/Rail.geojson')
       .then(res => res.json())
       .then(data => {
-        L.geoJSON(data).addTo(map);
+        L.geoJSON(data, {
+          style: {
+            color: "blue",   // railway line color
+            weight: 3        // line thickness
+          }
+        }).addTo(map);
       });
   </script>
 </body>
