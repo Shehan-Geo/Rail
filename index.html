@@ -42,8 +42,11 @@
       .then(data => {
         L.geoJSON(data, {
           style: {
-            color: "blue",   // railway line color
-            weight: 3        // line thickness
+            color: "red",   // railway line color
+            opacity: 1,
+            weight: 3,        // line thickness
+            opacity: 1,
+            fillOpacity: 0.8
           }
         }).addTo(map);
       });
