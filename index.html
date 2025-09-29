@@ -52,9 +52,13 @@
   <div id="controls">
     <h4>🚆 Route Finder</h4>
     <label for="start-station">Start Station:</label>
-    <select id="start-station"></select>
+    <select id="start-station">
+      <option>Loading stations...</option>
+    </select>
     <label for="end-station">End Station:</label>
-    <select id="end-station"></select>
+    <select id="end-station">
+      <option>Loading stations...</option>
+    </select>
     <button id="find-route-btn">Find Route</button>
   </div>
 
@@ -94,23 +98,29 @@
       stationsData = stations;
       railData = rail;
 
-      // Add stations to map and populate dropdowns
+      // Add stations to map
       L.geoJSON(stationsData, {
         pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 4, fillColor: "#555", color: "black", weight: 1, opacity: 1, fillOpacity: 0.8 })
       }).addTo(map);
+      
+      // Clear the "Loading..." message
+      startStationSelect.innerHTML = '';
+      endStationSelect.innerHTML = '';
 
       stationsData.features
         .sort((a, b) => a.properties.station.localeCompare(b.properties.station)) // Sort alphabetically
         .forEach(feature => {
           const stationName = feature.properties.station;
-          const coords = feature.geometry.coordinates;
-          
-          // Populate dropdowns
-          startStationSelect.innerHTML += `<option value="${stationName}">${stationName}</option>`;
-          endStationSelect.innerHTML += `<option value="${stationName}">${stationName}</option>`;
-          
-          // Store station coordinates for easy lookup
-          stationPointsMap.set(stationName, coords);
+          if (stationName) { // Ensure station name exists
+            const coords = feature.geometry.coordinates;
+            
+            // Populate dropdowns
+            startStationSelect.innerHTML += `<option value="${stationName}">${stationName}</option>`;
+            endStationSelect.innerHTML += `<option value="${stationName}">${stationName}</option>`;
+            
+            // Store station coordinates for easy lookup
+            stationPointsMap.set(stationName, coords);
+          }
         });
 
       // Build the graph network from the rail lines for routing
@@ -118,7 +128,11 @@
       railGraph = buildGraph(railData);
       console.log("Graph built!");
 
-    }).catch(error => console.error("Error loading data:", error));
+    }).catch(error => {
+      console.error("Error loading data:", error);
+      startStationSelect.innerHTML = '<option>Error loading data</option>';
+      endStationSelect.innerHTML = '<option>Error loading data</option>';
+    });
 
     
     // --- 3. GRAPH BUILDING LOGIC ---
@@ -195,11 +209,13 @@
 
         if (u === endNodeId) break; // Found the end
 
-        for (const v in railGraph.graph[u]) {
-          const alt = distances[u] + railGraph.graph[u][v];
-          if (alt < distances[v]) {
-            distances[v] = alt;
-            prev[v] = u;
+        if(u && railGraph.graph[u]) {
+          for (const v in railGraph.graph[u]) {
+            const alt = distances[u] + railGraph.graph[u][v];
+            if (alt < distances[v]) {
+              distances[v] = alt;
+              prev[v] = u;
+            }
           }
         }
       }
@@ -240,7 +256,7 @@
       
       const pathCoords = findShortestPath(startCoord, endCoord);
 
-      if (!pathCoords) {
+      if (!pathCoords || pathCoords.length < 2) {
         alert("Could not find a route. The stations may not be connected on the provided rail data.");
         return;
       }
