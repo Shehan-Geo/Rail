@@ -32,7 +32,16 @@
             weight: 3,
             opacity: 1,
             fillOpacity: 0.8
-          })
+          }),
+          // --- ADD THIS FUNCTION ---
+          onEachFeature: (feature, layer) => {
+            // Check if the feature has a 'station' property
+            if (feature.properties && feature.properties.station) {
+              // Bind a popup to the layer (the circle marker)
+              layer.bindPopup(feature.properties.station);
+            }
+          }
+          // --- END OF ADDITION ---
         }).addTo(map);
       });
 
@@ -42,9 +51,9 @@
       .then(data => {
         L.geoJSON(data, {
           style: {
-            color: "red",   // railway line color
+            color: "red",    // railway line color
             opacity: 1,
-            weight: 3,        // line thickness
+            weight: 3,       // line thickness
             opacity: 1,
             fillOpacity: 0.8
           }
